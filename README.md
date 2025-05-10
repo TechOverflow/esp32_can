@@ -3,6 +3,9 @@ esp32_can (twai_v2)
 
 This fork is updated for dual TWAI controllers (ESP32-C6) and adds relevant new examples.
 
+**CANipulator_test_forwarder**<br>
+This example simply forwards all traffic from CAN0 to CAN1 a vice-versa. Great for debugging which messages originate from a certain node.
+
 Credits:<br>
 [Collin80/esp32_can](https://github.com/collin80/esp32_can) - Original esp32_can library<br>
 [outlandnish/esp32_can](https://github.com/outlandnish/esp32_can) - Majority of twai_v2 library updates<br>
