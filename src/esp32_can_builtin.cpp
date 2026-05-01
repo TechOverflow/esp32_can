@@ -359,14 +359,21 @@ void ESP32CAN::enable()
     bool isListenOnly = listenOnly;
     bool isSelfTest   = noACK;
 
-    twai_onchip_node_config_t node_cfg = {};
-    node_cfg.io_cfg.tx               = _txPin;
-    node_cfg.io_cfg.rx               = _rxPin;
-    node_cfg.bit_timing.bitrate      = _baudrate;
-    node_cfg.tx_queue_depth          = BI_TX_BUFFER_SIZE;
-    node_cfg.fail_retry_cnt          = -1; // infinite retries (like legacy default)
-    node_cfg.flags.enable_listen_only = isListenOnly ? 1 : 0;
-    node_cfg.flags.enable_self_test   = isSelfTest   ? 1 : 0;
+    twai_onchip_node_config_t node_cfg = {
+        .io_cfg = {
+            .tx = _txPin,
+            .rx = _rxPin,
+        },
+        .bit_timing = {
+            .bitrate = _baudrate,
+        },
+        .fail_retry_cnt = -1,
+        .tx_queue_depth = BI_TX_BUFFER_SIZE,
+        .flags = {
+            .enable_self_test   = noACK     ? 1u : 0u,
+            .enable_listen_only = listenOnly ? 1u : 0u,
+        },
+    };
 
 #if SOC_TWAI_SUPPORT_FD
     // CAN-FD data phase – only populated when caller set a data baudrate
