@@ -80,7 +80,7 @@ void loop() {
   bool showGreen = now - lastCan0Frame < 1000;
   bool showBlue = now - lastCan1Frame < 1000;
 
-  leds[0] = Rgb { showGreen || showGreen ? 0 : 5, showGreen ? 5 : 0, showBlue ? 5 : 0 };
+  leds[0] = Rgb { showGreen || showBlue ? 0 : 5, showGreen ? 5 : 0, showBlue ? 5 : 0 };
   leds.show();
   leds.wait();
 }
