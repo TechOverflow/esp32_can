@@ -307,6 +307,13 @@ void loop() {
 | `sendFrame(frame)` | Transmit a classic CAN frame; returns `true` on success |
 | `sendFrameFD(frame)` | Transmit a CAN-FD frame (FD chips only) |
 
+
+### Reset
+
+| Method | Description |
+|---|---|
+| `resetIfStale(stallMs)` | Call from loop() if you want explicit sketch-side stall recovery |
+
 ---
 
 ## Troubleshooting
