@@ -273,6 +273,7 @@ bool IRAM_ATTR ESP32CAN::onRxDone(twai_node_handle_t handle,
     // processFrame touches FreeRTOS queues – safe from ISR via xQueueSendFromISR
     // We replicate the filter logic inline to stay ISR-safe.
     espCan->cyclesSinceTraffic = 0;
+    espCan->trafficEverSeen = true;
 
     BaseType_t woken = pdFALSE;
     for (int i = 0; i < BI_NUM_FILTERS; i++) {
@@ -328,16 +329,37 @@ void ESP32CAN::CAN_WatchDog_Builtin(void *pvParameters)
 
         if (espCan->node_handle == nullptr) continue;
 
-        twai_node_status_t  status;
-        twai_node_record_t  record;
-        if (twai_node_get_info(espCan->node_handle, &status, &record) == ESP_OK) {
-            if (status.state == TWAI_ERROR_BUS_OFF) {
-                espCan->cyclesSinceTraffic = 0;
-                // Disable then re-enable to trigger automatic recovery
-                twai_node_disable(espCan->node_handle);
-                if (twai_node_enable(espCan->node_handle) == ESP_OK) {
-                    espCan->readyForTraffic = true;
+        bool needsRecovery = false;
+
+        // State-based failures detected by onStateChange ISR callback
+        if (espCan->_errorPassive) {
+            espCan->_errorPassive = false;  // clear the flag before checking
+
+            twai_node_status_t status;
+            twai_node_record_t record;
+            if (twai_node_get_info(espCan->node_handle, &status, &record) == ESP_OK) {
+                if (status.state == TWAI_ERROR_BUS_OFF ||
+                    status.state == TWAI_ERROR_PASSIVE) {
+                    needsRecovery = true;
                 }
+            }
+        }
+
+        // Stall detection — no frames received for > 2 seconds
+        if (espCan->cyclesSinceTraffic > 10 &&
+            espCan->readyForTraffic         &&
+            espCan->trafficEverSeen)
+        {
+            needsRecovery = true;
+        }
+
+        if (needsRecovery) {
+            espCan->cyclesSinceTraffic = 0;
+            espCan->_errorPassive      = false;
+            espCan->readyForTraffic    = false;
+            twai_node_disable(espCan->node_handle);
+            if (twai_node_enable(espCan->node_handle) == ESP_OK) {
+                espCan->readyForTraffic = true;
             }
         }
     }
@@ -398,6 +420,7 @@ void ESP32CAN::enable()
     cbs.on_rx_done = ESP32CAN::onRxDone;
     cbs.on_tx_done = ESP32CAN::onTxDone;
     cbs.on_error   = ESP32CAN::onError;
+    cbs.on_state_change = ESP32CAN::onStateChange;
     twai_node_register_event_callbacks(node_handle, &cbs, this);
 
     // Create queues
@@ -644,6 +667,20 @@ void ESP32CAN::resetIfStale(uint32_t stallMs)
     }
 }
 
+bool IRAM_ATTR ESP32CAN::onStateChange(twai_node_handle_t handle,
+                                        const twai_state_change_event_data_t *edata,
+                                        void *user_ctx)
+{
+    // Any state change is worth investigating — the watchdog task will
+    // call twai_node_get_info() to determine the actual new state and
+    // decide whether recovery is needed. We just set a flag here.
+    ESP32CAN *espCan = static_cast<ESP32CAN *>(user_ctx);
+    (void)handle;
+    (void)edata;   // don't touch edata — struct members vary by IDF version
+    espCan->_errorPassive = true;
+    return false;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  TIER_V2  (IDF 5.2–5.4)  –  legacy _v2 handle-based API
 // ═════════════════════════════════════════════════════════════════════════════
@@ -661,12 +698,33 @@ void ESP32CAN::CAN_WatchDog_Builtin(void *pvParameters)
         vTaskDelay(xDelay);
         espCan->cyclesSinceTraffic++;
 
-        if (twai_get_status_info_v2(espCan->bus_handle, &status_info) == ESP_OK) {
-            if (status_info.state == TWAI_STATE_BUS_OFF) {
-                espCan->cyclesSinceTraffic = 0;
-                if (twai_initiate_recovery_v2(espCan->bus_handle) != ESP_OK) {
-                    printf("[TWAI] Could not initiate bus recovery!\n");
-                }
+        if (twai_get_status_info_v2(espCan->bus_handle, &status_info) != ESP_OK) continue;
+
+        bool needsRecovery = false;
+
+        if (status_info.state == TWAI_STATE_BUS_OFF) {
+            needsRecovery = true;
+            twai_initiate_recovery_v2(espCan->bus_handle);
+        }
+
+        if (status_info.tx_error_counter >= 128 ||
+            status_info.rx_error_counter >= 128) {
+            needsRecovery = true;
+        }
+
+        if (espCan->cyclesSinceTraffic > 10 &&
+            espCan->readyForTraffic         &&
+            espCan->trafficEverSeen)
+        {
+            needsRecovery = true;
+        }
+
+        if (needsRecovery) {
+            espCan->cyclesSinceTraffic = 0;
+            espCan->readyForTraffic    = false;
+            twai_stop_v2(espCan->bus_handle);
+            if (twai_start_v2(espCan->bus_handle) == ESP_OK) {
+                espCan->readyForTraffic = true;
             }
         }
     }
@@ -909,6 +967,16 @@ uint32_t ESP32CAN::get_rx_buff(CAN_FRAME &msg)
     CAN_FRAME frame;
     if (xQueueReceive(rx_queue, &frame, 0) == pdTRUE) { msg = frame; return true; }
     return false;
+}
+
+void ESP32CAN::resetIfStale(uint32_t stallMs)
+{
+    // cyclesSinceTraffic is incremented every 200 ms by the watchdog task
+    uint32_t threshold = stallMs / 200;
+    if (cyclesSinceTraffic > threshold) {
+        disable();
+        enable();
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
