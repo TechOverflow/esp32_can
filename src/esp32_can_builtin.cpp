@@ -363,6 +363,8 @@ void ESP32CAN::enable()
         .io_cfg = {
             .tx = _txPin,
             .rx = _rxPin,
+            .quanta_clk_out = GPIO_NUM_NC,
+            .bus_off_indicator = GPIO_NUM_NC,
         },
         .bit_timing = {
             .bitrate = _baudrate,
