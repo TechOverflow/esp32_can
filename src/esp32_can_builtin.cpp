@@ -365,6 +365,8 @@ void ESP32CAN::enable()
             .rx = _rxPin,
             .quanta_clk_out = GPIO_NUM_NC,
             .bus_off_indicator = GPIO_NUM_NC,
+            // .clkout_io = GPIO_NUM_NC,
+            // .bus_off_io = GPIO_NUM_NC,
         },
         .bit_timing = {
             .bitrate = _baudrate,
@@ -630,6 +632,16 @@ uint32_t ESP32CAN::get_rx_buff(CAN_FRAME &msg)
         return true;
     }
     return false;
+}
+
+void ESP32CAN::resetIfStale(uint32_t stallMs)
+{
+    // cyclesSinceTraffic is incremented every 200 ms by the watchdog task
+    uint32_t threshold = stallMs / 200;
+    if (cyclesSinceTraffic > threshold) {
+        disable();
+        enable();
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
