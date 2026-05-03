@@ -8,6 +8,8 @@ ESP32 to the three-controller ESP32-P4 and the CAN-FD-capable ESP32-C5.
 
 Check out the [CANipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) as an example of a device with dual-CAN transceivers.
 
+A real-world implementation of the device and this library can be found [here](https://github.com/TechOverflow/MS43-to-E90-CAN-Translator-ESP32). In this example, we take certain messages from an incompatible ECU's CAN Bus, modify (translate) them to known required ones for the body o powertrain CAN Bus on the other side. 
+
 <img src="https://img.tindie.com/images/resize/Ic5QZOyXJkvT2W2Ekt6Fbf1h4rM=/p/fit-in/1370x912/filters:fill(fff)/i/26064/products/2024-07-07T01:54:25.239Z-0001.jpg" width="400" />
 
 
