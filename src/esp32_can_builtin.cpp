@@ -394,7 +394,7 @@ void ESP32CAN::enable()
         .bit_timing = {
             .bitrate = _baudrate,
         },
-        .fail_retry_cnt = -1,
+        .fail_retry_cnt = 3,
         .tx_queue_depth = BI_TX_BUFFER_SIZE,
         .flags = {
             .enable_self_test   = noACK     ? 1u : 0u,
