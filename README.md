@@ -341,6 +341,9 @@ are no fixed TWAI GPIO pins on the P4.
 
 ## Additional examples
 
+**CANipulator_test_loopback**<br>
+Verifies that both on-chip CAN controllers AND both external transceivers are working, and that they can communicate with each other over a shared physical bus by sending messages back and forth. Connect CAN-L to CAN-L, CAN-H to CAN-H. Ground is likely already common. A 120 Ω termination resistor between CAN-H and CAN-L at each end of the bus is recommended (two resistors total). Without termination, short test jumpers may still work, but a real bus needs them.
+
 **CANipulator_test_forwarder**<br>
 This example simply forwards all traffic from CAN0 to CAN1 a vice-versa. Great for debugging which messages originate from a certain node.
 
