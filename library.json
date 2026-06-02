@@ -1,0 +1,7 @@
+{
+  "name": "ESP32_CAN_NG",
+  "version": "1.0.0",
+  "dependencies": {
+    "collin80/can_common": "*"
+  }
+}
