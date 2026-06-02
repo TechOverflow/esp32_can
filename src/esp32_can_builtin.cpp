@@ -267,7 +267,8 @@ bool IRAM_ATTR ESP32CAN::onRxDone(twai_node_handle_t handle,
     msg.extended = raw.header.ide;
     msg.rtr      = raw.header.rtr;
     // buffer_len holds actual received byte count
-    msg.length   = (raw.buffer_len <= 8) ? (uint8_t)raw.buffer_len : 8;
+    uint8_t rxLen = raw.header.dlc;
+    msg.length = (rxLen <= 8) ? rxLen : 8;
     for (int i = 0; i < 8; i++) msg.data.byte[i] = (i < (int)raw.buffer_len) ? buf[i] : 0;
 
     // processFrame touches FreeRTOS queues – safe from ISR via xQueueSendFromISR
