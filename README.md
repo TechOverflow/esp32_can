@@ -8,7 +8,7 @@ ESP32 to the three-controller ESP32-P4 and the CAN-FD-capable ESP32-C5.
 
 Check out the [CANipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) as an example of a device with dual-CAN transceivers.
 
-A real-world implementation of the device and this library can be found [here](https://github.com/TechOverflow/MS43-to-E90-CAN-Translator-ESP32). In this example, we take certain messages from an incompatible ECU's CAN Bus, modify (translate) them to known required ones for the body o powertrain CAN Bus on the other side. 
+A real-world implementation of the device and this library can be found [here](https://github.com/TechOverflow/MS43-to-E90-CAN-Translator-ESP32). In this example, we take certain messages from an incompatible ECU's CAN Bus, modify (translate) them to known required ones for the body or powertrain CAN Bus on the other side. 
 
 <img src="https://img.tindie.com/images/resize/Ic5QZOyXJkvT2W2Ekt6Fbf1h4rM=/p/fit-in/1370x912/filters:fill(fff)/i/26064/products/2024-07-07T01:54:25.239Z-0001.jpg" width="400" />
 
@@ -418,3 +418,9 @@ other libraries can be built off of to allow a more universal API for CAN.
 
 The needed can_common library is found here: https://github.com/collin80/can_common
 Some examples use the SmartLeds library found here: https://github.com/RoboticsBrno/SmartLeds
+
+---
+
+## Disclaimer
+
+This library and any associated hardware is intended solely for development, testing, educational, and off-road applications. Users are responsible for ensuring compliance with all applicable laws and regulations. The software and associated hardware are provided as-is and are not certified for use in road-going vehicles and should not be used to modify, control, or interfere with vehicle systems while operating on public roads.
