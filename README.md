@@ -17,7 +17,7 @@ A real-world implementation of the device and this library can be found [here](h
 
 ## Relationship to collin80/esp32_can
 
-This library is a fork of [collin80/esp32_can](https://github.com/collin80/esp32_can),
+This library is based on [collin80/esp32_can](https://github.com/collin80/esp32_can),
 which is itself part of a family of CAN libraries sharing the
 [collin80/can_common](https://github.com/collin80/can_common) abstract base class.
 That base class defines the `CAN_COMMON` interface and the `CAN_FRAME` / `CAN_FRAME_FD`
@@ -315,6 +315,62 @@ void loop() {
 | Method | Description |
 |---|---|
 | `resetIfStale(stallMs)` | Call from loop() if you want explicit sketch-side stall recovery |
+
+
+### Diagnostics
+
+| Method | Description |
+|---|---|
+| `getControllerStats()` | Exposes the controller's hardware error counters straight from the IDF driver |
+ 
+These are the same values the controller's
+internal error-confinement state machine uses to drive bus-off
+recovery — TEC and REC follow CAN 2.0B / ISO 11898 semantics
+(increment on errors, decrement on success; cross 128 → error-passive,
+cross 256 → bus-off).
+ 
+```cpp
+#include <esp32_can.h>
+ 
+void loop() {
+    CANControllerStats stats;
+    if (CAN0.getControllerStats(stats)) {
+        Serial.printf("TEC=%u  REC=%u  bus=%u  rx_overrun=%u\n",
+                      stats.txErrorCount,
+                      stats.rxErrorCount,
+                      stats.busErrorCount,
+                      stats.rxOverrunCount);
+    }
+    delay(1000);
+}
+```
+ 
+Returns `true` on success; `false` if the controller hasn't been
+initialised yet or the underlying IDF call fails. On failure the contents
+of `stats` are undefined — always check the return value before reading.
+ 
+| Field | Description |
+|---|---|
+| `txErrorCount` | TEC. Increments on TX errors, decrements on successful TX. Reaches 128 → error-passive; 256 → bus-off. |
+| `rxErrorCount` | REC. Same scheme for RX errors. |
+| `busErrorCount` | Cumulative bus errors observed since boot or last bus-off recovery. |
+| `rxOverrunCount` | Frames discarded because the RX queue was full. Indicates either bus rate > what the driver can keep up with, or a starved RX task. |
+
+> All four fields are saturated to `uint16_t` (max 65535). The V1/V2
+drivers internally use `uint32_t`, but for the diagnostic use cases
+these counters are intended for, the upper bytes are noise — anything
+above a few hundred is already deep into pathological territory.
+
+> **Note:** The TIER_NEW (`esp_driver_twai`, IDF 5.5+) driver does not expose the RX overrun counter — there's no public accessor as of IDF 5.5 even though the hardware counter still increments, so `getControllerStats()` always returns 0 in that field rather than removing it from the struct for consistency across all three tiers. If a future IDF release adds the accessor, this field will be updated to return the true value.
+ 
+#### Typical interpretations
+ 
+- **TEC and REC both 0, no bus errors growing:** healthy bus, no faults observed.
+- **TEC climbing alone:** TX side of the bus is unhealthy — bad termination on the local end, a node not acknowledging, or wiring fault.
+- **REC climbing alone:** RX side noise — likely EMI, ground bounce, or another node sending malformed frames.
+- **Both climbing in lockstep:** bus-wide problem — clock mismatch between nodes (wrong bit rate somewhere), severe noise, or shorted line.
+- **`rxOverrunCount` non-zero (V1/V2 only):** RX task can't keep up. Either lower the bus rate, raise the RX queue size with `setRXBufferSize()`, or check that your loop is not blocking.
+- **Controller in `TWAI_ERROR_BUS_OFF`** (visible via state callbacks or the library's automatic recovery): TEC reached 256. The library's watchdog will recover automatically; check counters afterward to find the root cause.
 
 ---
 
