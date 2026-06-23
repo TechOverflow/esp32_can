@@ -16,6 +16,11 @@
 
 #include "Arduino.h"
 #include "esp32_can_builtin.h"
+#include <algorithm>   // for std::min
+
+static inline uint16_t saturate_u16(uint32_t v) {
+    return v > 0xFFFF ? 0xFFFF : (uint16_t)v;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Speed table (TIER_V1 / TIER_V2 only)
@@ -394,7 +399,7 @@ void ESP32CAN::enable()
         .bit_timing = {
             .bitrate = _baudrate,
         },
-        .fail_retry_cnt = 3,
+        .fail_retry_cnt = -1,
         .tx_queue_depth = BI_TX_BUFFER_SIZE,
         .flags = {
             .enable_self_test   = noACK     ? 1u : 0u,
@@ -680,6 +685,29 @@ bool IRAM_ATTR ESP32CAN::onStateChange(twai_node_handle_t handle,
     (void)edata;   // don't touch edata — struct members vary by IDF version
     espCan->_errorPassive = true;
     return false;
+}
+
+bool ESP32CAN::getControllerStats(CANControllerStats &stats)
+{
+    if (node_handle == nullptr) return false;
+
+    twai_node_status_t status;
+    twai_node_record_t record;
+    if (twai_node_get_info(node_handle, &status, &record) != ESP_OK) {
+        return false;
+    }
+
+    // twai_node_record_t already exposes TEC/REC as uint16_t.
+    stats.txErrorCount  = status.tx_error_count;
+    stats.rxErrorCount  = status.rx_error_count;
+    stats.busErrorCount = saturate_u16(record.bus_err_num);
+    // The new esp_driver_twai API does not expose an RX overrun counter.
+    // The HW counter is still incremented internally, but there's no
+    // public accessor as of IDF 5.5. Reads 0 here for forward-compat:
+    // if a future IDF adds the field we can wire it in without breaking
+    // the API.
+    stats.rxOverrunCount = 0;
+    return true;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -980,6 +1008,24 @@ void ESP32CAN::resetIfStale(uint32_t stallMs)
     }
 }
 
+bool ESP32CAN::getControllerStats(CANControllerStats &stats)
+{
+    if (bus_handle == nullptr) return false;
+
+    twai_status_info_t info;
+    if (twai_get_status_info_v2(bus_handle, &info) != ESP_OK) {
+        return false;
+    }
+
+    // twai_status_info_t fields are uint32_t in the legacy driver.
+    // Saturate to keep the wire format compact and stable across tiers.
+    stats.txErrorCount   = saturate_u16(info.tx_error_counter);
+    stats.rxErrorCount   = saturate_u16(info.rx_error_counter);
+    stats.busErrorCount  = saturate_u16(info.bus_error_count);
+    stats.rxOverrunCount = saturate_u16(info.rx_overrun_count);
+    return true;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  TIER_V1  (IDF < 5.2)  –  legacy single-controller API
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1208,6 +1254,20 @@ uint32_t ESP32CAN::get_rx_buff(CAN_FRAME &msg)
     CAN_FRAME frame;
     if (xQueueReceive(rx_queue, &frame, 0) == pdTRUE) { msg = frame; return true; }
     return false;
+}
+
+bool ESP32CAN::getControllerStats(CANControllerStats &stats)
+{
+    twai_status_info_t info;
+    if (twai_get_status_info(&info) != ESP_OK) {
+        return false;
+    }
+
+    stats.txErrorCount   = saturate_u16(info.tx_error_counter);
+    stats.rxErrorCount   = saturate_u16(info.rx_error_counter);
+    stats.busErrorCount  = saturate_u16(info.bus_error_count);
+    stats.rxOverrunCount = saturate_u16(info.rx_overrun_count);
+    return true;
 }
 
 #endif // TWAI_TIER_*
