@@ -423,4 +423,4 @@ Some examples use the SmartLeds library found here: https://github.com/RoboticsB
 
 ## Disclaimer
 
-This library and any associated hardware is intended solely for development, testing, educational, and off-road applications. Users are responsible for ensuring compliance with all applicable laws and regulations. The software and associated hardware are provided as-is and are not certified for use in road-going vehicles and should not be used to modify, control, or interfere with vehicle systems while operating on public roads.
+This library and any associated hardware are intended solely for development, testing, educational, and off-road applications. Users are responsible for ensuring compliance with all applicable laws and regulations. The software and associated hardware are provided as-is and are not certified for use in road-going vehicles and should not be used to modify, control, or interfere with vehicle systems while operating on public roads.
