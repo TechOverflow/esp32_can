@@ -43,6 +43,22 @@ typedef struct {
     bool     configured;
 } ESP32_FILTER;
 
+/// Per-controller diagnostic counters surfaced from the underlying IDF
+/// driver. These are the same values the controller's automatic error
+/// confinement state machine uses internally (TEC reaches 128 →
+/// error-passive; reaches 256 → bus-off; etc).
+///
+/// All fields are saturated to uint16_t. `rxOverrunCount` is 0 on
+/// TIER_NEW (the new esp_driver_twai doesn't expose it); use V1 or V2
+/// builds if you need it. `busErrorCount` is the cumulative bus error
+/// count since boot or last bus-off recovery.
+typedef struct {
+    uint16_t txErrorCount;     // TEC — transmit error counter
+    uint16_t rxErrorCount;     // REC — receive error counter
+    uint16_t busErrorCount;    // cumulative bus errors observed
+    uint16_t rxOverrunCount;   // 0 on TIER_NEW (not exposed by driver)
+} CANControllerStats;
+
 // Speed table entry – used by TIER_V1 and TIER_V2 only.
 // TIER_NEW uses bitrate integers directly.
 #if !defined(TWAI_TIER_NEW)
@@ -75,6 +91,11 @@ public:
     void setCANPins(gpio_num_t rxPin, gpio_num_t txPin);
     void setRXBufferSize(int newSize);
     void setTXBufferSize(int newSize);
+    // Read controller diagnostic counters. Returns false if the driver
+    // isn't initialized or the underlying IDF call fails. On success,
+    // `stats` is populated; on failure its contents are undefined.
+    // Safe to call from any task; no locking required.
+    bool getControllerStats(CANControllerStats &stats);
 #if defined(TWAI_TIER_NEW) || defined(TWAI_TIER_V2)
     void resetIfStale(uint32_t stallMs = 2000);
 #endif
