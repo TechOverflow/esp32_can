@@ -28,6 +28,8 @@
 
 #include <Arduino.h>
 #include <esp32_can.h>
+#include <PCA9536D.h>
+#include <SmartLeds.h>
 
 // ── Bit rates ─────────────────────────────────────────────────────────────────
 #define ARBITRATION_BAUD  500000UL   // 500 kbps nominal / arbitration phase
@@ -40,6 +42,14 @@ bool forwardClassic(CAN_COMMON &srcBus, CAN_COMMON &dstBus, int srcNum);
 bool forwardFD     (CAN_COMMON &srcBus, CAN_COMMON &dstBus, int srcNum);
 
 // ─────────────────────────────────────────────────────────────────────────────
+#define TRAFFIC_TIMEOUT_MS 1000
+#define LED_PIN            2
+#define LED_COUNT          2
+#define LED_CHANNEL        0
+#define LED_BRIGHTNESS     64
+
+PCA9536 io;
+SmartLed  leds(LED_WS2812B, LED_COUNT, LED_PIN, LED_CHANNEL, DoubleBuffer);
 
 void setup()
 {
@@ -47,10 +57,17 @@ void setup()
     while (!Serial) { delay(10); }
     Serial.println("[CANipulator-C5] CAN-FD forwarder starting");
 
+    leds[0] = rgb(LED_BRIGHTNESS, 0, 0);
+    leds[1] = rgb(LED_BRIGHTNESS, 0, 0);
+    leds.show();
+
+    if (expInit()) Serial.println("[EXP] Transceivers in ON state (not silent + not shutdown).");
+    else           Serial.println("[EXP] WARNING: transceivers not configured!");
+
     // ── CAN0 ──────────────────────────────────────────────────────────────
     // Set the FD data-phase baud rate BEFORE calling begin/init.
     // begin() internally calls init() which calls enable(), which builds the
-    // twai_onchip_node_config_t; _dataBaudrate must be set first.
+    // twai_onchip_node_config_t; setDataBaudrate must be set first.
     CAN0.setCANPins(GPIO_NUM_4, GPIO_NUM_5);   // RX, TX
     CAN0.setDataBaudrate(DATA_BAUD);
     CAN0.begin(ARBITRATION_BAUD);
@@ -184,4 +201,41 @@ void printFrameFD(CAN_FRAME_FD *msg, int busNum)
         Serial.printf(" %02X", msg->data.uint8[i]);
     }
     Serial.println();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PCA9536 helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+static bool expInit() {
+    Wire.begin();
+    if (!io.begin()) {
+        Serial.println("[EXP] PCA9536 not detected at 0x41.");
+        return false;
+    }
+    for (uint8_t pin = 0; pin < 4; pin++) {
+        io.pinMode(pin, OUTPUT);
+        // Boot all transceiver control lines LOW = not silent + not shutdown.
+        io.digitalWrite(pin, LOW);
+    }
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LEDs helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+static inline Rgb rgb(uint8_t r, uint8_t g, uint8_t b) { return Rgb{r, g, b}; }
+
+static void updateLeds() {
+    uint32_t now = millis();
+    bool can0Active = (lastCan0Frame != 0) && (now - lastCan0Frame < TRAFFIC_TIMEOUT_MS);
+    bool can1Active = (lastCan1Frame != 0) && (now - lastCan1Frame < TRAFFIC_TIMEOUT_MS);
+
+    Rgb idle0 = rgb(LED_BRIGHTNESS, 0, 0);
+    Rgb idle1 = rgb(LED_BRIGHTNESS, 0, 0);
+
+    leds[0] = can0Active ? rgb(0, LED_BRIGHTNESS, 0) : idle0;
+    leds[1] = can1Active ? rgb(0, 0, LED_BRIGHTNESS) : idle1;
+    leds.show();
 }
