@@ -310,13 +310,23 @@ bool IRAM_ATTR ESP32CAN::onError(twai_node_handle_t handle,
                                   const twai_error_event_data_t *edata,
                                   void *user_ctx)
 {
-    // Bus-off recovery is handled by the watchdog task via twai_node_get_info.
-    // The error callback just signals that something went wrong; the watchdog
-    // will detect TWAI_ERROR_BUS_OFF on its next poll and recover.
-    ESP32CAN *espCan = static_cast<ESP32CAN *>(user_ctx);
+    // The IDF 5.5 error callback fires on every bus error event — most
+    // of which are transient TX-side bumps (no ACK, arbitration loss,
+    // form error) that the controller absorbs on its own as TEC ebbs
+    // back to zero with each successful TX. Flipping readyForTraffic
+    // here would deadlock callers that gate on the flag: one error →
+    // flag false → caller stops feeding sendFrame → TEC never drains
+    // → flag stays false forever, even though hardware state is still
+    // ERROR_ACTIVE the entire time.
+    //
+    // readyForTraffic is now managed exclusively by onStateChange,
+    // which sees the actual transitions (active → passive → bus-off
+    // and back). This callback is intentionally a no-op; if you want
+    // to count errors for diagnostics, do it here, but do NOT touch
+    // the ready flag.
+    (void)handle;
     (void)edata;
-    // Conservatively mark not ready; watchdog will restore this on recovery
-    espCan->readyForTraffic = false;
+    (void)user_ctx;
     return false;
 }
 
@@ -677,13 +687,39 @@ bool IRAM_ATTR ESP32CAN::onStateChange(twai_node_handle_t handle,
                                         const twai_state_change_event_data_t *edata,
                                         void *user_ctx)
 {
-    // Any state change is worth investigating — the watchdog task will
-    // call twai_node_get_info() to determine the actual new state and
-    // decide whether recovery is needed. We just set a flag here.
+    // This is now the authoritative writer of readyForTraffic. The
+    // IDF 5.5 twai_state_change_event_data_t struct exposes both the
+    // old and new state, so we can map transitions deterministically:
+    //
+    //   TWAI_ERROR_ACTIVE   — fully functional, ready for TX/RX
+    //   TWAI_ERROR_WARNING  — TEC/REC > 96 but still active, can TX
+    //   TWAI_ERROR_PASSIVE  — TEC/REC > 127, degraded but can still TX
+    //                          (won't assert dominant ACKs)
+    //   TWAI_ERROR_BUS_OFF  — TEC saturated; controller is TX-blocked
+    //                          and needs a disable/enable cycle to
+    //                          recover. This is the only state where
+    //                          we should refuse to feed sendFrame.
+    //
+    // We also set _errorPassive on entry to BUS_OFF so the watchdog
+    // task picks up the recovery cycle on its next poll. (The name
+    // is historical — it really means "watchdog: look at me".)
     ESP32CAN *espCan = static_cast<ESP32CAN *>(user_ctx);
     (void)handle;
-    (void)edata;   // don't touch edata — struct members vary by IDF version
-    espCan->_errorPassive = true;
+    if (!edata) return false;
+
+    switch (edata->new_sta) {
+        case TWAI_ERROR_BUS_OFF:
+            espCan->readyForTraffic = false;
+            espCan->_errorPassive   = true;   // wake the watchdog
+            break;
+        case TWAI_ERROR_ACTIVE:
+        case TWAI_ERROR_PASSIVE:
+        default:
+            // Anything that isn't bus-off is fine to TX into. The
+            // controller will absorb transient errors on its own.
+            espCan->readyForTraffic = true;
+            break;
+    }
     return false;
 }
 
