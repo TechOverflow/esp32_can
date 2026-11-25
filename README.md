@@ -3,7 +3,7 @@ ESP32 CAN library with legacy and FD support
 
 This is an Arduino library for the built-in CAN (TWAI) controller(s) on ESP32 family chips.
 It provides a high-level, Arduino-friendly API that works across all ESP-IDF versions
-from v4.x through v5.5+ and across all ESP32 variants — from the original single-controller
+from v4.x through v6.1 (arduino-esp32 2.x, 3.x and 4.x) and across all ESP32 variants — from the original single-controller
 ESP32 to the three-controller ESP32-P4 and the CAN-FD-capable ESP32-C5.
 
 Check out the [CANipulator](https://www.tindie.com/products/fusion/canipulator-automotive-dual-can-esp32-interface/) as an example of a device with dual-CAN transceivers.
@@ -30,8 +30,10 @@ The key differences introduced in this fork:
 `esp_driver_twai` (`twai_new_node_onchip`, callback-based async RX). This fork adds a
 complete third implementation tier for the new driver, selected automatically at compile time.
 
-**CAN-FD support.** On chips where `SOC_TWAI_SUPPORT_FD` is defined (currently ESP32-C5),
-`setDataBaudrate()` enables the FD data phase and `sendFrameFD()` / `get_rx_buffFD()`
+**CAN-FD support.** On FD-capable chips (currently ESP32-C5) the library defines
+`ESP32CAN_HAS_FD` (IDF 5.5 calls the capability `SOC_TWAI_SUPPORT_FD`, IDF 6.x
+`SOC_TWAI_FD_SUPPORTED`; use `ESP32CAN_HAS_FD` in sketches to cover both).
+`setDataBaudrate()` / `beginFD()` enable the FD data phase and `sendFrameFD()` / `readFD()`
 handle frames up to 64 bytes. The FD path is compiled away entirely on non-FD chips.
 
 **Three-tier build system.** Rather than a single `#if` guard, the library now selects
@@ -40,7 +42,7 @@ one of three complete implementations at compile time based on `ESP_IDF_VERSION`
 ```
 TWAI_TIER_V1  →  IDF < 5.2    legacy single-controller API
 TWAI_TIER_V2  →  IDF 5.2–5.4  legacy _v2 handle-based API
-TWAI_TIER_NEW →  IDF ≥ 5.5    new esp_driver_twai component
+TWAI_TIER_NEW →  IDF ≥ 5.5    new esp_driver_twai component (incl. IDF 6.x)
 ```
 
 Existing sketches written for the original library compile and run unchanged.
@@ -187,7 +189,8 @@ void loop() {
 
 ### Three-controller classic CAN (ESP32-P4)
 
-`CAN2` is available when `SOC_TWAI_CONTROLLER_NUM >= 3`. Usage is identical to `CAN0`/`CAN1`.
+`CAN2` is available when `SOC_TWAI_CONTROLLER_NUM >= 3`. Usage is identical to `CAN0`/`CAN1`,
+except that `CAN2` has no default pins — `setCANPins()` is required before `begin()`.
 
 ```cpp
 #include <esp32_can.h>
@@ -215,8 +218,19 @@ void setup() {
 
 ### CAN-FD (ESP32-C5)
 
-CAN-FD is only available on chips where `SOC_TWAI_SUPPORT_FD` is defined.
-The FD data-phase baud rate must be set **before** calling `begin()`.
+CAN-FD is only available on chips where `ESP32CAN_HAS_FD` is defined.
+The FD data-phase baud rate must be set **before** calling `begin()` — or use
+`beginFD(nominal, data)` to do both at once.
+
+FD frames are kept separate from classic frames: they pass the same `watchFor()` filter
+table, then go to FD callbacks (`setCallbackFD()` / `setGeneralCallbackFD()` /
+`CANListener::gotFrameFD()`) or to the FD receive queue (`readFD()`, `availableFD()`).
+They never appear, truncated, in the classic `read()` queue or classic callbacks.
+
+**Bit-rate switching (BRS):** by default every FD frame is sent with BRS whenever a data
+baud rate is configured. Call `setPerFrameBRS(true)` to decide per frame instead: BRS is
+then taken from `frame.rrs` (non-zero = on). Received FD frames report their BRS bit in
+`rrs`, so a bridge with per-frame BRS enabled forwards frames exactly as received.
 
 ```cpp
 #include <esp32_can.h>
@@ -277,6 +291,9 @@ void loop() {
 |---|---|
 | `setCANPins(rx, tx)` | Set GPIO pins — call before `begin()` |
 | `setDataBaudrate(bps)` | Enable CAN-FD data phase — call before `begin()` (FD chips only) |
+| `beginFD(nominal, data)` | Set FD data phase and start the controller in one call (FD chips only) |
+| `setPerFrameBRS(bool)` | Take BRS per frame from `frame.rrs` instead of always on (FD chips only) |
+| `setTXBufferSize(n)` | TX queue depth before `begin()` (max 20 on IDF ≥ 5.5) |
 | `begin(bps)` | Start the controller at the given bit rate |
 | `beginAutoSpeed()` | Auto-detect bus speed; returns detected bps or 0 |
 | `set_baudrate(bps)` | Change speed on a running controller (triggers restart) |
@@ -293,6 +310,7 @@ void loop() {
 | `watchForRange(low, high)` | Accept IDs in the given inclusive range |
 | `setCallback(filter, fn)` | Register a callback for a specific filter slot |
 | `setGeneralCallback(fn)` | Register a callback for all accepted frames |
+| `setCallbackFD(filter, fn)` / `setGeneralCallbackFD(fn)` | Same, for CAN-FD frames (FD chips only) |
 
 ### Receive
 
@@ -301,12 +319,13 @@ void loop() {
 | `available()` | Number of frames waiting in the RX queue |
 | `read(frame)` | Read the oldest frame from the queue into `frame` |
 | `readFD(frame)` | Read an FD frame (FD chips only) |
+| `availableFD()` | Number of FD frames waiting (FD chips only) |
 
 ### Transmit
 
 | Method | Description |
 |---|---|
-| `sendFrame(frame)` | Transmit a classic CAN frame; returns `true` on success |
+| `sendFrame(frame)` | Transmit a classic CAN frame; returns `true` if queued (`false` if the TX queue is full) |
 | `sendFrameFD(frame)` | Transmit a CAN-FD frame (FD chips only) |
 
 
@@ -384,7 +403,11 @@ and that the filter ID/mask matches your traffic. The filter table uses exact-ma
 `(receivedId & mask) == (filterId & mask)`.
 
 **Bus-off recovery** — the internal watchdog task polls every 200 ms and automatically
-restarts the controller after a bus-off event. No action needed in your sketch.
+starts bus-off recovery. The controller rejoins after it has seen 128 × 11 recessive bits
+on the bus (CAN spec); `readyForTraffic` is false until then. No action needed in your sketch.
+
+**Debug / error output** — driver messages use the Arduino core log macros. Set
+*Tools → Core Debug Level* to *Error* (or higher) to see them.
 
 **CAN-FD: `setDataBaudrate()` has no effect** — it must be called *before* `begin()`.
 Calling it afterwards requires `CAN0.disable(); CAN0.enable();` to take effect.

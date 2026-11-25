@@ -7,7 +7,7 @@
  * other bus. Supports both classic CAN frames (≤ 8 bytes) and CAN-FD frames
  * (up to 64 bytes) transparently.
  *
- * Board:    CANipulator V2 or ESP32-C5 Dev Board (SOC_TWAI_SUPPORT_FD, two TWAI controllers)
+ * Board:    CANipulator V2 or ESP32-C5 Dev Board (ESP32CAN_HAS_FD, two TWAI controllers)
  * Library:  esp32_can  (IDF 5.5+ tier, TWAI_TIER_NEW)
  *           can_common (collin80)
  *
@@ -70,12 +70,14 @@ void setup()
     // twai_onchip_node_config_t; setDataBaudrate must be set first.
     CAN0.setCANPins(GPIO_NUM_4, GPIO_NUM_5);   // RX, TX
     CAN0.setDataBaudrate(DATA_BAUD);
+    CAN0.setPerFrameBRS(true);   // mirror each received frame's BRS bit when forwarding
     CAN0.begin(ARBITRATION_BAUD);
     CAN0.watchFor();   // accept all IDs
 
     // ── CAN1 ──────────────────────────────────────────────────────────────
     CAN1.setCANPins(GPIO_NUM_6, GPIO_NUM_7);   // RX, TX
     CAN1.setDataBaudrate(DATA_BAUD);
+    CAN1.setPerFrameBRS(true);
     CAN1.begin(ARBITRATION_BAUD);
     CAN1.watchFor();
 
@@ -127,7 +129,7 @@ void loop()
  */
 bool forwardFD(CAN_COMMON &srcBus, CAN_COMMON &dstBus, int srcNum)
 {
-#if defined(SOC_TWAI_SUPPORT_FD)
+#if defined(ESP32CAN_HAS_FD)
     CAN_FRAME_FD frameFD;
     if (srcBus.readFD(frameFD)) {
         // Only process frames that are actually FD format

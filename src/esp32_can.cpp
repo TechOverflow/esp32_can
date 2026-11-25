@@ -8,6 +8,11 @@
              //rxpin       txpin
 ESP32CAN __attribute__((weak)) CAN0(GPIO_NUM_16, GPIO_NUM_17, 0) ;
 
-#if SOC_TWAI_CONTROLLER_NUM == 2 and ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
+#if defined(ESP32CAN_HAS_CAN1)
     ESP32CAN __attribute__((weak)) CAN1(GPIO_NUM_18, GPIO_NUM_19, 1);
+#endif
+
+#if defined(ESP32CAN_HAS_CAN2)
+    // No sensible default pins on the P4 – call CAN2.setCANPins() before begin()
+    ESP32CAN __attribute__((weak)) CAN2(GPIO_NUM_NC, GPIO_NUM_NC, 2);
 #endif

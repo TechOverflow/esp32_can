@@ -13,7 +13,15 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "esp_idf_version.h"
+#include "soc/soc_caps.h"
 #include "can_common.h"
+
+// ── CAN-FD capability ─────────────────────────────────────────────────────────
+// IDF 5.5 names the capability SOC_TWAI_SUPPORT_FD; IDF 6.x renamed it to
+// SOC_TWAI_FD_SUPPORTED (arduino-esp32 4.x). Use ESP32CAN_HAS_FD everywhere.
+#if defined(SOC_TWAI_SUPPORT_FD) || defined(SOC_TWAI_FD_SUPPORTED)
+  #define ESP32CAN_HAS_FD 1
+#endif
 
 // ── Driver-tier selection ─────────────────────────────────────────────────────
 // TIER_NEW  : IDF 5.5+ esp_driver_twai (twai_new_node_onchip, callbacks)
@@ -35,6 +43,19 @@
 #define BI_NUM_FILTERS  32
 #define BI_RX_BUFFER_SIZE 32
 #define BI_TX_BUFFER_SIZE 20
+
+#if defined(TWAI_TIER_NEW)
+// The new driver keeps a *pointer* to every queued frame until it has been
+// sent, so each in-flight frame needs its own buffer. In flight = driver queue
+// depth + frames already loaded into hardware TX slots (HAL supports up to 8).
+// Slots are freed from on_tx_done; must stay <= 32 (tracked in a bitmask).
+  #define BI_TX_SLOTS       (BI_TX_BUFFER_SIZE + 8 + 1)
+  #if defined(ESP32CAN_HAS_FD)
+    #define BI_TX_PAYLOAD_MAX 64
+  #else
+    #define BI_TX_PAYLOAD_MAX 8
+  #endif
+#endif
 
 typedef struct {
     uint32_t id;
@@ -103,11 +124,12 @@ public:
     // Shared queues (accessed by static callbacks/tasks)
     QueueHandle_t callbackQueue = nullptr;
     QueueHandle_t rx_queue      = nullptr;
-#if defined(TWAI_TIER_NEW) && defined(SOC_TWAI_SUPPORT_FD)
-    // Parallel queue carrying full CAN_FRAME_FD (up to 64 bytes + fdf/brs), fed
-    // alongside rx_queue by onRxDone. Lets callers receive FD frames without the
-    // 8-byte downcast the classic rx_queue applies.
-    QueueHandle_t rx_queue_fd   = nullptr;
+#if defined(TWAI_TIER_NEW) && defined(ESP32CAN_HAS_FD)
+    // FD frames (fdf=1) never go to rx_queue / callbackQueue, which only hold an
+    // 8-byte CAN_FRAME. They pass the same software filter table and go to
+    // callbackQueueFD (FD callbacks / listeners) or rx_queue_fd (polling).
+    QueueHandle_t rx_queue_fd     = nullptr;
+    QueueHandle_t callbackQueueFD = nullptr;
 #endif
 
     // Traffic watchdog counter (reset by RX path)
@@ -129,11 +151,13 @@ public:
     // Internal frame processing (used by static helpers)
     bool processFrame(CAN_FRAME &msg);
 
-// CAN-FD support (TIER_NEW / SOC_TWAI_SUPPORT_FD only)
-#if defined(TWAI_TIER_NEW) && defined(SOC_TWAI_SUPPORT_FD)
-    // sendFrameFD transmits an FD frame. Bit-rate switching (BRS) is taken from
-    // txFrame.rrs (non-zero = BRS on) so callers can choose per frame; BRS still
-    // requires a data baudrate to have been set via setDataBaudrate().
+// CAN-FD support (TIER_NEW on FD-capable chips only, see ESP32CAN_HAS_FD)
+#if defined(TWAI_TIER_NEW) && defined(ESP32CAN_HAS_FD)
+    // sendFrameFD transmits an FD frame. BRS (bit-rate switch) defaults to on
+    // whenever a data baudrate is configured. With setPerFrameBRS(true), BRS is
+    // taken per frame from txFrame.rrs instead (non-zero = BRS on) — useful for
+    // bridges that must reproduce the received BRS bit (get_rx_buffFD reports
+    // it in rrs). BRS always requires a configured data baudrate.
     bool sendFrameFD(CAN_FRAME_FD &txFrame) override;
 
     // Receive a full FD frame from rx_queue_fd. Populates the 64-byte payload,
@@ -146,6 +170,13 @@ public:
 
     // Call this before init() to enable the FD data phase
     void setDataBaudrate(uint32_t dataBaudrate) { _dataBaudrate = dataBaudrate; }
+
+    // See sendFrameFD. Default false (BRS on for every FD frame).
+    void setPerFrameBRS(bool enable) { _perFrameBRS = enable; }
+
+    // can_common FD entry points, so CAN0.beginFD(nominal, data) works too.
+    uint32_t initFD(uint32_t nominalRate, uint32_t dataRate) override;
+    uint32_t set_baudrateFD(uint32_t nominalSpeed, uint32_t dataSpeed) override;
 #endif
 
 protected:
@@ -170,9 +201,23 @@ private:
     twai_node_handle_t node_handle = nullptr;
     uint32_t _baudrate  = 500000; // stored so enable() can re-use it
     uint32_t _dataBaudrate = 0;   // non-zero enables CAN-FD BRS
-    volatile bool _errorPassive = false;
+    uint32_t _txQueueDepth = BI_TX_BUFFER_SIZE;
+    bool     _perFrameBRS  = false;
+    // The driver reports "disabled" and "bus-off" as the same state, so track
+    // whether *we* enabled the node to tell the two apart.
+    volatile bool _nodeEnabled    = false;
+    volatile bool _busOffPending  = false; // set by onStateChange, handled by watchdog
+
+    // TX frame storage: must outlive twai_node_transmit() until on_tx_done.
+    twai_frame_t      txFrames[BI_TX_SLOTS];
+    uint8_t           txBufs[BI_TX_SLOTS][BI_TX_PAYLOAD_MAX];
+    volatile uint32_t txBusyMask = 0;
+    portMUX_TYPE      txMux;            // initialised in constructors
+    bool _queueTx(uint32_t id, bool ext, bool rtr, bool fdf, bool brs,
+                  const uint8_t *data, uint8_t len);
 #elif defined(TWAI_TIER_V2)
     twai_handle_t bus_handle = nullptr;
+    volatile bool _recovering = false;   // bus-off recovery in progress
     twai_general_config_t twai_general_cfg;
     twai_timing_config_t  twai_speed_cfg;
     twai_filter_config_t  twai_filters_cfg;
@@ -180,6 +225,7 @@ private:
     twai_general_config_t twai_general_cfg;
     twai_timing_config_t  twai_speed_cfg;
     twai_filter_config_t  twai_filters_cfg;
+    volatile bool _recovering = false;   // bus-off recovery in progress
 #endif
 
     // ── Internal helpers ────────────────────────────────────────────────────
@@ -187,6 +233,9 @@ private:
     int  _setFilter(uint32_t id, uint32_t mask, bool extended)                       override;
     int  _setFilterSpecific(uint8_t mailbox, uint32_t id, uint32_t mask, bool extended) override;
     void sendCallback(CAN_FRAME *frame);
+#if defined(TWAI_TIER_NEW) && defined(ESP32CAN_HAS_FD)
+    void sendCallbackFD(CAN_FRAME_FD *frame);
+#endif
 
     // ── Static task / callback functions ───────────────────────────────────
     static void task_CAN(void *pvParameters);
